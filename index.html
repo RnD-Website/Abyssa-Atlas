@@ -173,12 +173,20 @@ body[data-theme=light] .line h2 b{color:#0a58c9}
 #atlas header b{font-weight:600}
 #abadge{font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;background:rgba(200,255,106,.18);color:var(--lime)}
 #abadge.off{background:rgba(255,255,255,.14);color:#cfe3f5}
-#aclose{margin-left:auto;font-size:22px;line-height:1;opacity:.7;padding:0 4px}
+#aplan{margin-left:auto;font-size:12px;padding:6px 11px;border-radius:99px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);color:#fff;transition:background .3s}
+#aplan:hover{background:rgba(255,255,255,.26)}
+#aclose{margin-left:4px;font-size:22px;line-height:1;opacity:.7;padding:0 4px}
 #alog{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-height:150px}
 .am{max-width:86%;padding:10px 14px;border-radius:16px;font-size:14px;line-height:1.5;animation:pop .4s var(--ease)}
 @keyframes pop{from{opacity:0;transform:translateY(8px)}}
 .am.bot{background:rgba(255,255,255,.12);border-bottom-left-radius:5px}
 .am.user{align-self:flex-end;background:var(--lime);color:#0a2748;border-bottom-right-radius:5px}
+.am.plan{max-width:100%;width:100%}
+.plan ol{list-style:none;padding:0;margin:10px 0 0;display:flex;flex-direction:column;gap:6px}
+.plan li button{width:100%;text-align:left;padding:9px 12px;border-radius:12px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);color:#fff;font-size:13px;line-height:1.4;transition:background .3s}
+.plan li button:hover{background:rgba(255,255,255,.24)}
+.plan li b{display:block;font-weight:600;color:var(--lime)}
+.plan .go{margin-top:10px;width:100%;padding:11px;border-radius:12px;background:var(--lime);color:#0a2748;font-weight:600;font-size:14px}
 .am.think{opacity:.7;letter-spacing:.2em;animation:blink 1s infinite}
 @keyframes blink{50%{opacity:.25}}
 #achips{display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 12px}
@@ -234,7 +242,7 @@ html.lock #afab,html.lock #atlas{opacity:0;visibility:hidden;pointer-events:none
 
 <button id="afab" aria-expanded="false" aria-controls="atlas"><b>✦</b> Ask Atlas</button>
 <section id="atlas" aria-label="Ask Atlas, the dive guide">
-  <header><b>Atlas</b><span id="abadge">AI guide</span><button id="aclose" aria-label="Close chat">×</button></header>
+  <header><b>Atlas</b><span id="abadge">AI guide</span><button id="aplan" type="button">🧭 Plan my dive</button><button id="aclose" aria-label="Close chat">×</button></header>
   <div id="alog" role="log" aria-live="polite"></div>
   <div id="achips"></div>
   <form id="aform"><input id="ain" maxlength="300" placeholder="Ask about the dive…" autocomplete="off" aria-label="Your question"><button aria-label="Send">→</button></form>
@@ -725,7 +733,7 @@ function game3(){
 
 /* ---------------------------------------------------------------- Ask Atlas (AI guide) */
 const ATLAS_T={surface:0,problem:1,sunlit:2,twilight:3,midnight:4,map:5};
-const ai={hist:[],busy:false};
+const ai={hist:[],busy:false,plan:false};
 const aEl=$('#atlas'), aLog=$('#alog'), aIn=$('#ain'), aBadge=$('#abadge');
 function atlasToggle(on){ aEl.classList.toggle('open',on); $('#afab').setAttribute('aria-expanded',on); if(on&&!aLog.children.length) greet(); if(on) setTimeout(()=>aIn.focus({preventScroll:true}),350); }
 $('#afab').onclick=()=>atlasToggle(!aEl.classList.contains('open')); $('#aclose').onclick=()=>atlasToggle(false);
@@ -738,6 +746,7 @@ function greet(){
   addMsg('bot','Hi, I’m Atlas, your guide on this dive. Ask me anything, or tell me where to go.');
   const chips=['Where should I start?','What’s in the twilight zone?','Take me to midnight','Play a mission'];
   $('#achips').innerHTML=''; chips.forEach(c=>{const b=document.createElement('button');b.type='button';b.textContent=c;b.onclick=()=>ask(c);$('#achips').appendChild(b);});
+  const pb=document.createElement('button');pb.type='button';pb.textContent='\u{1F9ED} Plan my dive';pb.onclick=startPlan;$('#achips').prepend(pb);
 }
 function doAction(a){
   if(!a) return; const z=ATLAS_T[a.target]; if(z===undefined) return;
@@ -763,6 +772,7 @@ function localBrain(q){
 }
 async function ask(q){
   q=(q||'').trim(); if(!q||ai.busy) return; ai.busy=true; $('#achips').innerHTML='';
+  if(ai.plan){ ai.plan=false; try{ await runPlan(q); } finally{ ai.busy=false; } return; }
   addMsg('user',q); ai.hist.push({role:'user',content:q});
   const th=addMsg('bot','•••'); th.classList.add('think');
   let out, live=true;
@@ -777,6 +787,54 @@ async function ask(q){
   setTimeout(()=>doAction(out.action),Math.min(1600,400+out.reply.length*12));
   ai.busy=false;
 }
+
+// ---------- Dive Planner
+const STOP_LABEL={sunlit:'Observe · sunlit zone',twilight:'Trace · twilight zone',midnight:'Illuminate · midnight zone',map:'The map'};
+const STOP_WHY=['See every instrument in your fleet first.','Follow signals as they move.','Join faint readings into one map.'];
+const KW=[['sensor','fleet','surface','light','see','visib','start','overview','inventory','what do i have','observe'],['current','move','flow','track','trace','follow','path','change','sonar','trend'],['dark','deep','connect','link','pattern','insight','night','glow','plankton','story','find']];
+function localPlan(goal){
+  const t=goal.toLowerCase(), sc=KW.map((ws,i)=>({i,n:ws.filter(w=>t.includes(w)).length}));
+  const order=[...sc].sort((a,b)=>b.n-a.n||a.i-b.i), hit=order.filter(o=>o.n>0).map(o=>o.i);
+  const pick=hit.length?hit.slice(0,3):[0,1,2]; if(pick.length<2) for(const i of [0,1,2]) if(!pick.includes(i)&&pick.length<2) pick.push(i);
+  const ids=['sunlit','twilight','midnight'];
+  return {summary:hit.length?'Here is a route built around what you described.':'No strong match, so here is the classic route, top to bottom.',
+    stops:[...pick.map(i=>({target:ids[i],why:STOP_WHY[i]})),{target:'map',why:'See it all as one picture.'}]};
+}
+let tour=null; const stopTour=()=>{clearTimeout(tour);tour=null;const g=document.querySelector('.plan .go');if(g)g.textContent='▶ Start guided dive';};
+['wheel','touchstart','keydown'].forEach(ev=>addEventListener(ev,e=>{ if(tour&&!(e.target&&e.target.closest&&e.target.closest('#atlas'))) stopTour(); },{passive:true}));
+function runTour(stops,btn){
+  if(tour){ stopTour(); return; }
+  if(innerWidth<760) atlasToggle(false);
+  let i=0; btn.textContent='■ Stop tour';
+  const step=()=>{ if(i>=stops.length){ stopTour(); return; } goChap(ATLAS_T[stops[i].target]); i++; tour=setTimeout(step,5500); };
+  step();
+}
+function renderPlan(plan){
+  const d=document.createElement('div'); d.className='am bot plan';
+  const sm=document.createElement('div'); sm.textContent=plan.summary||'Here is your route.'; d.appendChild(sm);
+  const ol=document.createElement('ol'); const stops=plan.stops.filter(x=>x.target in ATLAS_T).slice(0,4);
+  stops.forEach((x,k)=>{ const li=document.createElement('li'), b=document.createElement('button'); b.type='button';
+    const h=document.createElement('b'); h.textContent=`${k+1} · ${STOP_LABEL[x.target]||x.target}`; b.appendChild(h); b.appendChild(document.createTextNode(String(x.why||'').slice(0,140)));
+    b.onclick=()=>{ stopTour(); if(innerWidth<760) atlasToggle(false); goChap(ATLAS_T[x.target]); }; li.appendChild(b); ol.appendChild(li); });
+  d.appendChild(ol);
+  const go=document.createElement('button'); go.type='button'; go.className='go'; go.textContent='▶ Start guided dive'; go.onclick=()=>runTour(stops,go); d.appendChild(go);
+  aLog.appendChild(d); aLog.scrollTop=1e9;
+}
+async function runPlan(goal){
+  addMsg('user',goal); const th=addMsg('bot','•••'); th.classList.add('think');
+  let plan, live=true;
+  try{
+    const r=await fetch('api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'plan',goal:goal.slice(0,200)}),signal:AbortSignal.timeout(15000)});
+    if(!r.ok) throw new Error('no ai'); plan=await r.json(); if(!Array.isArray(plan.stops)||!plan.stops.length) throw new Error('empty');
+  }catch(e){ live=false; plan=localPlan(goal); await new Promise(r=>setTimeout(r,500)); }
+  th.remove(); aBadge.textContent=live?'Live AI':'Offline guide'; aBadge.classList.toggle('off',!live);
+  renderPlan(plan); sub.userData.flash=1;
+}
+function startPlan(){
+  atlasToggle(true); $('#achips').innerHTML=''; ai.plan=true;
+  addMsg('bot','Tell me what you want to explore, like “I want to see how things move”, and I’ll plan a route.'); aIn.focus({preventScroll:true});
+}
+$('#aplan').onclick=startPlan;
 $('#aform').onsubmit=e=>{e.preventDefault();const v=aIn.value;aIn.value='';ask(v);};
 
 /* ---------------------------------------------------------------- main loop */
